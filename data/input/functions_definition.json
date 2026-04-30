@@ -19,7 +19,7 @@
     "description": "Generate a greeting message for a person by name.",
     "parameters": {
       "name": {
-        "type": "number"
+        "type": "string"
       }
     },
     "returns": {

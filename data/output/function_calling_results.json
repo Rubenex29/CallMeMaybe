@@ -19,14 +19,14 @@
         "prompt": "Greet shrek",
         "name": "fn_greet",
         "parameters": {
-            "name": 1234567890
+            "name": "shrek"
         }
     },
     {
         "prompt": "Greet john",
         "name": "fn_greet",
         "parameters": {
-            "name": 123
+            "name": "john"
         }
     },
     {

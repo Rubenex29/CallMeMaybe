@@ -59,7 +59,7 @@ class CallMeMaybe(Small_LLM_Model):
 
         # Pre-encode fixed tokens to simply extend the input_ids without
         # running inference
-        self.name_token = self.encode('" name": "')[0].tolist()
+        self.name_token = self.encode(' "name": "')[0].tolist()
         self.params_open_token = self.encode(', "parameters": {')[0].tolist()
 
     def get_func_definitions(self):
@@ -184,7 +184,6 @@ class CallMeMaybe(Small_LLM_Model):
 
         # Decode ONLY what was generated (ignoring the input prompt prefix)
         generated_text = self.decode(input_ids[prompt_len:])
-        print(f"Generated text: {generated_text}")
         return generated_text.strip()
 
     def call_tool(self):
