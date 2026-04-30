@@ -1,10 +1,10 @@
 [
     {
-        "prompt": "what is the sum of 2?",
+        "prompt": "what is the sum of 2 and 3?",
         "name": "fn_add_numbers",
         "parameters": {
             "a": 2,
-            "b": 0
+            "b": 3
         }
     },
     {
@@ -19,14 +19,14 @@
         "prompt": "Greet shrek",
         "name": "fn_greet",
         "parameters": {
-            "name": "shrek"
+            "name": 1234567890
         }
     },
     {
         "prompt": "Greet john",
         "name": "fn_greet",
         "parameters": {
-            "name": "john"
+            "name": 123
         }
     },
     {

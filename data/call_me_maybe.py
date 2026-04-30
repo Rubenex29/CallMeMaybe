@@ -17,7 +17,7 @@ OUTPUT_PATH = "output/function_calling_results.json"
 
 with open(FUNCTIONS_DEFS_PATH, "r", encoding="utf-8") as f:
     functions_list = json.load(f)
-# inicialize tool named null
+# Initialize tools info string
 tools_info = ""
 
 for fn in functions_list:
@@ -35,7 +35,6 @@ The JSON should have the following format:
 Example:
 Every detail:
 {tools_info}
-fn_unkown: Call this function ONLY if the user request is ambiguous, lacks details, or does not perfectly match the other functions.
 
 Do not add text before or after the JSON.
 It must end with the closing curly brace of the JSON.
@@ -54,48 +53,52 @@ class CallMeMaybe(Small_LLM_Model):
         self.id_quote = self.encode('"')[0].tolist()[0]
         self.id_colon = self.encode(":")[0].tolist()[0]
 
-        # load function definitions once (evita opens repetidos)
+        # Load function definitions once to avoid repeated file openings
         with open(FUNCTIONS_DEFS_PATH, "r", encoding="utf-8") as f:
             self.functions = json.load(f)
 
-        # pre-encode tokens fixos para usar input_ids.extend(...) sem inferência
-        self.name_token = self.encode('"name": "')[0].tolist()
+        # Pre-encode fixed tokens to simply extend the input_ids without
+        # running inference
+        self.name_token = self.encode('" name": "')[0].tolist()
         self.params_open_token = self.encode(', "parameters": {')[0].tolist()
 
     def get_func_definitions(self):
-        # retorna o cache carregado no __init__
+        # Return the cached functions loaded during __init__
         return self.functions
 
     def generate(self, input_ids: list, user_request: str) -> str:
         prompt_len = len(input_ids)
 
-        # Escapa corretamente aspas internas no prompt
+        # Correctly escape internal quotes in the prompt
         safe_user_request = json.dumps(user_request, ensure_ascii=False)
         request = self.encode(f'"prompt": {safe_user_request},')[0].tolist()
 
-        # tokens fixos pre-encodados -> adicionamos com extend
+        # Fixed pre-encoded tokens that we will append using extend
         name = self.name_token
         param = self.params_open_token
-        # --- DESCODIFICAÇÃO RESTRITA (CONSTRAINED DECODING) ---
-        # Se for o primeiro token da resposta, forçamos a chaveta '{'
+
+        # --- CONSTRAINED DECODING ---
+        # Force the first generated token to be the opening brace '{'
         input_ids.extend([self.id_json_open])
         # ------------------------------------------------------
+
+        # Append the encoded prompt request
         input_ids.extend(request)
-        # Escolhemos o ID com maior probabilidade (agora restrito)
+        # Append the pre-encoded 'name' key
         input_ids.extend(name)
-        # Agora queremos forçar a geração do nome da função, que tem de ser um dos nomes das funções disponíveis, por isso vamos fazer um ciclo enquanto o que for gerado for diferente de todas as chaves de func_name, e dentro do ciclo vamos ir restringindo os tokens possíveis para os próximos tokens da função
-        logits = self.get_logits_from_input_ids(input_ids)
-        constrained_logits = np.full_like(logits, -float("inf"))
-        # quero um ciclo enquanto a for diferente de todas as chaves de func_name
-        r = ""  # Decodifica os últimos tokens para verificar o que foi gerado
+
+        # Loop until the generated text matches one of the available
+        # function names
+        # r: string to decode the recent tokens and check what has
+        # been generated
+        r = ""
         i = 0
         funcs = self.get_func_definitions()
         func_name = {}
         for f in funcs:
-            func_name[f["name"]] = f["description"], f["parameters"], f["returns"]
-        # also add null here, same formate as "Tool Name: null\nDescription: A tool that does nothing, used when the user request cannot be solved with any of the other tools.\nParameters: None\n\n"
-        func_name["fn_unkown"] = "Function not found", {}, None
-        # problem: what if we dont have the function in
+            func_name[f["name"]] = f["description"], f["parameters"]
+
+        # Handle the case where the model needs to pick an exact function name
         while r not in func_name.keys():
             logits = self.get_logits_from_input_ids(input_ids)
             constrained_logits = np.full_like(logits, -float("inf"))
@@ -108,72 +111,80 @@ class CallMeMaybe(Small_LLM_Model):
             next_token_id = int(np.argmax(logits))
             r += self.decode([next_token_id])
             input_ids.append(next_token_id)
+
         i = 0
         a = self.encode('"')[0].tolist()
         input_ids.extend(a)
-        while i < len(param):
-            logits = self.get_logits_from_input_ids(input_ids)
-            constrained_logits = np.full_like(logits, -float("inf"))
-            constrained_logits[param[i]] = 10.0  # Prioriza o próximo token do user_request
-            logits = constrained_logits
-            next_token_id = int(np.argmax(logits))
-            input_ids.append(next_token_id)
-            i += 1
-        # usa as funções carregadas no __init__
+        input_ids.extend(param)
+
         def get_function(name, functions):
             return next((fn for fn in functions if fn["name"] == name), None)
 
         fn = get_function(r, self.functions)
         params = fn["parameters"] if fn else {}
-        # also add null option
+
+        # Iteratively process each parameter
         for p, t in params.items():
             key = '"' + p + '": '
             key_encoded = self.encode(key)[0].tolist()
-            j = 0
-            while j < len(key_encoded):
-                logits = self.get_logits_from_input_ids(input_ids)
-                constrained_logits = np.full_like(logits, -float("inf"))
-                constrained_logits[key_encoded[j]] = 10.0  # Prioriza o próximo token do user_request
-                logits = constrained_logits
-                next_token_id = int(np.argmax(logits))
-                input_ids.append(next_token_id)
-                j += 1
-            logits = self.get_logits_from_input_ids(input_ids)
-            constrained_logits = np.full_like(logits, -float("inf"))
-            # Para o valor do parâmetro, quero obrigar a colocar o valor do user_request (que está em request), tem de ser ciclo para compar palarvas e numeros grandes
-            r = ""  # Decodifica os últimos tokens para verificar o que foi gerado
+            input_ids.extend(key_encoded)
+
+            # Iteratively generate the parameter value, checking against
+            # expected type
+            r = ""  # clear tracked generation output
             i = 0
-            # enquanto r nao estiver em request
+
             if t["type"] == "string":
-                # Para strings, adicionamos aspas no início e no final
+                # For strings, prepend the opening quote
                 a = self.encode('"')[0].tolist()
                 input_ids.extend(a)
             while True:
+                # 1. Get the natural LLM prediction logit (without -inf
+                # constraint)
                 logits = self.get_logits_from_input_ids(input_ids)
                 next_token_id = int(np.argmax(logits))
-                r += self.decode([next_token_id])
-                # verificar se, caso for type int, so pode ter numero
+                token_str = self.decode([next_token_id])
+
                 if t["type"] == "number":
-                    if not r.isdigit():
+                    # Clean up strange spaces the tokenizer might introduce
+                    clean_str = token_str.strip()
+
+                    # 2. Check if the token is part of a valid number
+                    # (Allowing '.' and '-' for decimals and negatives)
+                    if clean_str.isdigit() or clean_str in ['.', '-']:
+                        input_ids.append(next_token_id)
+                        r += token_str
+                    else:
                         break
                 else:
-                    if '"' in r or "{" in r or "}" in r:  # Para strings, verificamos se a aspa de fechamento foi gerada
-                        r = r[:-1]  # Remove a aspa de fechamento do valor
+                    # Logic for strings: stop generation at a closing
+                    # character
+                    if ('"' in token_str or "{" in token_str or
+                            "}" in token_str):
+                        # Remove the closing character to keep only the clean
+                        # string value
+                        token_str = token_str.replace('"', '')\
+                            .replace('{', '').replace('}', '')
+                        r += token_str
                         break
-                input_ids.append(next_token_id)
+
+                    input_ids.append(next_token_id)
+                    r += token_str
             if t["type"] == "string":
                 a = self.encode('"')[0].tolist()
                 input_ids.extend(a)
-            if p != list(params.keys())[-1]:  # Se não for o último parâmetro, adiciona a vírgula
+            if p != list(params.keys())[-1]:
+                # If it is not the last parameter, add a comma separator
                 a = self.encode(', ')[0].tolist()
                 input_ids.extend(a)
 
-        # fecha 'parameters' e o objeto principal
+        # Close 'parameters' and the main JSON object blocks
         input_ids.append(self.id_json_close)
         input_ids.append(self.id_json_close)
 
-        # Decodificamos APENAS o que foi gerado (ignorando o prompt inicial)
+        # Decode ONLY what was generated (ignoring the input prompt prefix)
         generated_text = self.decode(input_ids[prompt_len:])
+        print(f"Generated text: {generated_text}")
         return generated_text.strip()
 
     def call_tool(self):
