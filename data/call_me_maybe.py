@@ -14,9 +14,12 @@ except ImportError:
 FUNCTIONS_DEFS_PATH = "input/functions_definition.json"
 TESTS_PATH = "input/function_calling_tests.json"
 OUTPUT_PATH = "output/function_calling_results.json"
-
-with open(FUNCTIONS_DEFS_PATH, "r", encoding="utf-8") as f:
-    functions_list = json.load(f)
+try:
+    with open(FUNCTIONS_DEFS_PATH, "r", encoding="utf-8") as f:
+        functions_list = json.load(f)
+except FileNotFoundError:
+    print(f"File not found: {FUNCTIONS_DEFS_PATH}")
+    sys.exit(1)
 # Initialize tools info string
 tools_info = ""
 
@@ -39,10 +42,6 @@ Every detail:
 Do not add text before or after the JSON.
 It must end with the closing curly brace of the JSON.
 """
-print(TOOLS_DESCRIPTION)
-func_defs = "input/function_calling_tests.json"
-func_calls = "input/function_calls.json"
-output = "output/function_calls_output.json"
 
 
 class CallMeMaybe(Small_LLM_Model):
@@ -54,8 +53,7 @@ class CallMeMaybe(Small_LLM_Model):
         self.id_colon = self.encode(":")[0].tolist()[0]
 
         # Load function definitions once to avoid repeated file openings
-        with open(FUNCTIONS_DEFS_PATH, "r", encoding="utf-8") as f:
-            self.functions = json.load(f)
+        self.functions = functions_list
 
         # Pre-encode fixed tokens to simply extend the input_ids without
         # running inference
@@ -97,7 +95,6 @@ class CallMeMaybe(Small_LLM_Model):
         func_name = {}
         for f in funcs:
             func_name[f["name"]] = f["description"], f["parameters"]
-
         # Handle the case where the model needs to pick an exact function name
         while r not in func_name.keys():
             logits = self.get_logits_from_input_ids(input_ids)
@@ -125,14 +122,13 @@ class CallMeMaybe(Small_LLM_Model):
 
         # Iteratively process each parameter
         for p, t in params.items():
-            key = '"' + p + '": '
+            key = '"' + p + '":'
             key_encoded = self.encode(key)[0].tolist()
             input_ids.extend(key_encoded)
 
             # Iteratively generate the parameter value, checking against
             # expected type
             r = ""  # clear tracked generation output
-            i = 0
 
             if t["type"] == "string":
                 # For strings, prepend the opening quote
@@ -147,29 +143,41 @@ class CallMeMaybe(Small_LLM_Model):
 
                 if t["type"] == "number":
                     # Clean up strange spaces the tokenizer might introduce
+                    # print(token_str)
                     clean_str = token_str.strip()
 
                     # 2. Check if the token is part of a valid number
                     # (Allowing '.' and '-' for decimals and negatives)
-                    if clean_str.isdigit() or clean_str in ['.', '-']:
+                    is_valid = all(c.isdigit() or c in '.-' for c in clean_str)
+                    if is_valid:
                         input_ids.append(next_token_id)
                         r += token_str
                     else:
                         break
                 else:
-                    # Logic for strings: stop generation at a closing
-                    # character
-                    if ('"' in token_str or "{" in token_str or
-                            "}" in token_str):
-                        # Remove the closing character to keep only the clean
-                        # string value
-                        token_str = token_str.replace('"', '')\
-                            .replace('{', '').replace('}', '')
+                    # Logic for strings: stop generation at a closing character
+                    if '"' in token_str:
+                        # remove quotes AND braces to avoid inserting them
+                        cleaned = token_str.replace('"', '').replace('{', '').replace('}', '')
+                        # also drop newlines inside string
+                        cleaned = cleaned.replace('\n', '').replace('\r', '')
+                        if cleaned:
+                            cleaned_ids = self.encode(cleaned)[0].tolist()
+                            input_ids.extend(cleaned_ids)
+                            r += cleaned
+                        # if token contained closing braces, stop
+                        if '}' in token_str:
+                            break
+                        continue
+
+                    if ('"}' in token_str or "{" in token_str or "}" in token_str or "\n" in token_str):
+                        token_str = token_str.replace('{', '').replace('}', '').replace('\n', '')
                         r += token_str
                         break
 
                     input_ids.append(next_token_id)
                     r += token_str
+                    print(r)
             if t["type"] == "string":
                 a = self.encode('"')[0].tolist()
                 input_ids.extend(a)
@@ -189,9 +197,12 @@ class CallMeMaybe(Small_LLM_Model):
     def call_tool(self):
         start = time.perf_counter()
         results = []
-
-        with open(TESTS_PATH, "r", encoding="utf-8") as f:
-            tests = json.load(f)
+        try:
+            with open(TESTS_PATH, "r", encoding="utf-8") as f:
+                tests = json.load(f)
+        except FileNotFoundError:
+            print(f"File not found: {TESTS_PATH}")
+            return
         tools_ids = self.encode(TOOLS_DESCRIPTION)[0].tolist()
         for call in tests:
             prompt_text = call["prompt"]
@@ -200,7 +211,7 @@ class CallMeMaybe(Small_LLM_Model):
             prompt_ids = self.encode(prompt_str)[0].tolist()
             input_ids = tools_ids + prompt_ids
             raw = self.generate(input_ids, prompt_text)
-
+            print(raw)
             try:
                 results.append(json.loads(raw))
                 print(f"Generated JSON: {raw}")
@@ -210,14 +221,18 @@ class CallMeMaybe(Small_LLM_Model):
                     "error": f"invalid JSON: {e}",
                     "raw": raw
                 })
-
-        with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=4, ensure_ascii=False)
+        try:
+            with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=4, ensure_ascii=False)
+        except FileNotFoundError:
+            print(f"File not found: {OUTPUT_PATH}")
+            return
 
         elapsed = time.perf_counter() - start
         print(f"Tempo de execução: {elapsed:.4f}s")
 
 
 # export HF_HOME=/sgoinfre/$(whoami)/hf_cache
-call_me_maybe = CallMeMaybe()
-call_me_maybe.call_tool()
+if __name__ == "__main__":
+    call_me_maybe = CallMeMaybe()
+    call_me_maybe.call_tool()
