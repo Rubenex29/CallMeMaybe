@@ -120,6 +120,16 @@ class CallMeMaybe(Small_LLM_Model):
         fn = get_function(r, self.functions)
         params = fn["parameters"] if fn else {}
 
+        def escape_json_string_fragment(fragment: str) -> str:
+            # Keep generated string content JSON-safe while building output
+            return (
+                fragment
+                .replace('\\', '\\\\')
+                .replace('\n', '\\n')
+                .replace('\r', '\\r')
+                .replace('\t', '\\t')
+            )
+
         # Iteratively process each parameter
         for p, t in params.items():
             key = '"' + p + '":'
@@ -129,17 +139,24 @@ class CallMeMaybe(Small_LLM_Model):
             # Iteratively generate the parameter value, checking against
             # expected type
             r = ""  # clear tracked generation output
+            last_token_id = None
 
             if t["type"] == "string":
                 # For strings, prepend the opening quote
                 a = self.encode('"')[0].tolist()
                 input_ids.extend(a)
-            while True:
+            for i in range(60):  # Limit the number of iterations
                 # 1. Get the natural LLM prediction logit (without -inf
                 # constraint)
                 logits = self.get_logits_from_input_ids(input_ids)
                 next_token_id = int(np.argmax(logits))
                 token_str = self.decode([next_token_id])
+
+                # Stop if the model starts repeating the same token
+                # consecutively.
+                if last_token_id == next_token_id:
+                    break
+                last_token_id = next_token_id
 
                 if t["type"] == "number":
                     # Clean up strange spaces the tokenizer might introduce
@@ -154,33 +171,48 @@ class CallMeMaybe(Small_LLM_Model):
                         r += token_str
                     else:
                         break
-                else:
-                    # Logic for strings: stop generation at a closing character
-                    if '"' in token_str:
-                        # remove quotes AND braces to avoid inserting them
-                        cleaned = token_str.replace('"', '').replace('{', '').replace('}', '')
-                        # also drop newlines inside string
-                        cleaned = cleaned.replace('\n', '').replace('\r', '')
-                        if cleaned:
-                            cleaned_ids = self.encode(cleaned)[0].tolist()
-                            input_ids.extend(cleaned_ids)
-                            r += cleaned
-                        # if token contained closing braces, stop
-                        if '}' in token_str:
-                            break
-                        continue
-
-                    if ('"}' in token_str or "{" in token_str or "}" in token_str or "\n" in token_str):
-                        token_str = token_str.replace('{', '').replace('}', '').replace('\n', '')
-                        r += token_str
+                if t["type"] == "string":
+                    print(token_str)
+                    if "," in token_str:
                         break
 
-                    input_ids.append(next_token_id)
-                    r += token_str
-                    print(r)
+                    elif '"' in token_str:
+                        # he should continue without adding the quote to the input_ids, but we stop the generation of this parameter
+                        token_str = token_str.replace('"', '')
+                        safe_token_str = escape_json_string_fragment(token_str)
+                        encoded_token = self.encode(safe_token_str)[0].tolist()
+                        r += safe_token_str
+                          # Add the closing quote for the string
+                        if "}" in token_str:
+                            break
+                        input_ids.extend(encoded_token)
+                        continue
+                    elif ('"}' in token_str or "{" in token_str or "}" in token_str or "\n" in token_str or "," in token_str):
+                        token_str = token_str.replace('{', '').replace('}', '').replace('\n', '').replace(',', '')
+                        safe_token_str = escape_json_string_fragment(token_str)
+                        r += safe_token_str
+                        encoded_token = self.encode(safe_token_str)[0].tolist()
+                        input_ids.extend(encoded_token)
+                        break
+                    safe_token_str = escape_json_string_fragment(token_str)
+                    encoded_token = self.encode(safe_token_str)[0].tolist()
+                    input_ids.extend(encoded_token)
+                    r += safe_token_str
+
             if t["type"] == "string":
                 a = self.encode('"')[0].tolist()
                 input_ids.extend(a)
+            if t["type"] == "boolean":
+                # For booleans, we expect the model to generate 'true' or 'false'
+                if token_str.lower().strip() in ['true', 'false']:
+                    # We can encode the boolean value as a string in JSON
+                    bool_str = token_str.lower()
+                    encoded_bool = self.encode(bool_str)[0].tolist()
+                    input_ids.extend(encoded_bool)
+                else:
+                    # If the generated value is not a valid boolean, we can
+                    # choose to break or handle it as needed
+                    break
             if p != list(params.keys())[-1]:
                 # If it is not the last parameter, add a comma separator
                 a = self.encode(', ')[0].tolist()
@@ -214,7 +246,7 @@ class CallMeMaybe(Small_LLM_Model):
             print(raw)
             try:
                 results.append(json.loads(raw))
-                print(f"Generated JSON: {raw}")
+                print(f"Generated JSON: {raw}\n")
             except json.JSONDecodeError as e:
                 results.append({
                     "prompt": prompt_text,

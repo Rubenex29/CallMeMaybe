@@ -67,5 +67,17 @@
     "returns": {
       "type": "string"
     }
+  },
+  {
+    "name": "fn_set_notifications",
+    "description": "Enable or disable notifications.",
+    "parameters": {
+      "enabled": {
+        "type": "boolean"
+      }
+    },
+    "returns": {
+      "type": "string"
+    }
   }
 ]
