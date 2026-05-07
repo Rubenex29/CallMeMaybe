@@ -96,19 +96,44 @@ class CallMeMaybe(Small_LLM_Model):
         for f in funcs:
             func_name[f["name"]] = f["description"], f["parameters"]
         # Handle the case where the model needs to pick an exact function name
-        while r not in func_name.keys():
-            logits = self.get_logits_from_input_ids(input_ids)
-            constrained_logits = np.full_like(logits, -float("inf"))
-            for func in func_name.keys():
-                if func.startswith(r):
-                    func_encoded = self.encode(func)[0].tolist()[i]
-                    constrained_logits[func_encoded] = logits[func_encoded]
-            logits = constrained_logits
-            i += 1
-            next_token_id = int(np.argmax(logits))
-            r += self.decode([next_token_id])
-            input_ids.append(next_token_id)
+        # Use position index `i` to permit progressive matching of function tokens
+        for _ in range(50):  # Limit the number of iterations to prevent infinite loops
+            orig_logits = self.get_logits_from_input_ids(input_ids)
+            constrained_logits = np.full_like(orig_logits, -float("inf"))
+            any_candidate = False
 
+            # Build constraints based on the next expected token for candidate function names
+            for func in func_name.keys():
+                token_ids = self.encode(func)[0].tolist()
+                if func.startswith(r):
+                    # If there's a next token at position i, allow it; otherwise
+                    # we have already matched the full function string and should stop.
+                    if i < len(token_ids):
+                        func_encoded = token_ids[i]
+                        constrained_logits[func_encoded] = orig_logits[func_encoded]
+                        any_candidate = True
+                    else:
+                        any_candidate = True
+
+            # If no candidate tokens were set, fall back to original logits
+            if not any_candidate or np.isneginf(constrained_logits).all():
+                logits = orig_logits
+            else:
+                logits = constrained_logits
+
+            next_token_id = int(np.argmax(logits))
+            token_str = self.decode([next_token_id])
+            r += token_str
+            input_ids.append(next_token_id)
+            i += 1
+
+            # If we've matched a full function name, stop generating further tokens
+            if r in func_name:
+                break
+        if r not in func_name:
+            # If we exit the loop without a valid function name, we can handle it as needed
+            print(f"Failed to generate a valid function name. Last attempt: '{r}'")
+            return ""
         i = 0
         a = self.encode('"')[0].tolist()
         input_ids.extend(a)
@@ -139,28 +164,24 @@ class CallMeMaybe(Small_LLM_Model):
             # Iteratively generate the parameter value, checking against
             # expected type
             r = ""  # clear tracked generation output
-            last_token_id = None
-
             if t["type"] == "string":
                 # For strings, prepend the opening quote
                 a = self.encode('"')[0].tolist()
                 input_ids.extend(a)
-            for i in range(60):  # Limit the number of iterations
+            
+            iteration_count = 0
+            max_iterations = 30  # Prevent infinite loops
+            while iteration_count < max_iterations:
+                iteration_count += 1
                 # 1. Get the natural LLM prediction logit (without -inf
                 # constraint)
                 logits = self.get_logits_from_input_ids(input_ids)
                 next_token_id = int(np.argmax(logits))
                 token_str = self.decode([next_token_id])
-
-                # Stop if the model starts repeating the same token
-                # consecutively.
-                if last_token_id == next_token_id:
-                    break
-                last_token_id = next_token_id
+                print(token_str)
 
                 if t["type"] == "number":
                     # Clean up strange spaces the tokenizer might introduce
-                    # print(token_str)
                     clean_str = token_str.strip()
 
                     # 2. Check if the token is part of a valid number
@@ -172,32 +193,28 @@ class CallMeMaybe(Small_LLM_Model):
                     else:
                         break
                 if t["type"] == "string":
-                    print(token_str)
-                    if "," in token_str:
+                    # Check for end-of-parameter markers
+                    if "," in token_str or "}" in token_str:
+                        # These indicate end of this parameter
+                        # Remove them and stop
+                        token_str = token_str.replace(',', '').replace('}', '')
+                        if token_str:
+                            safe_token_str = escape_json_string_fragment(token_str)
+                            r += safe_token_str
                         break
-
-                    elif '"' in token_str:
-                        # he should continue without adding the quote to the input_ids, but we stop the generation of this parameter
-                        token_str = token_str.replace('"', '')
+                    
+                    # Remove quotes (they might appear in the middle, just ignore them)
+                    token_str = token_str.replace('"', '')
+                    
+                    # Remove problematic characters that shouldn't be in string content
+                    token_str = token_str.replace('{', '').replace('\n', '')
+                    
+                    # Add what remains
+                    if token_str:
                         safe_token_str = escape_json_string_fragment(token_str)
                         encoded_token = self.encode(safe_token_str)[0].tolist()
-                        r += safe_token_str
-                          # Add the closing quote for the string
-                        if "}" in token_str:
-                            break
                         input_ids.extend(encoded_token)
-                        continue
-                    elif ('"}' in token_str or "{" in token_str or "}" in token_str or "\n" in token_str or "," in token_str):
-                        token_str = token_str.replace('{', '').replace('}', '').replace('\n', '').replace(',', '')
-                        safe_token_str = escape_json_string_fragment(token_str)
                         r += safe_token_str
-                        encoded_token = self.encode(safe_token_str)[0].tolist()
-                        input_ids.extend(encoded_token)
-                        break
-                    safe_token_str = escape_json_string_fragment(token_str)
-                    encoded_token = self.encode(safe_token_str)[0].tolist()
-                    input_ids.extend(encoded_token)
-                    r += safe_token_str
 
             if t["type"] == "string":
                 a = self.encode('"')[0].tolist()
@@ -243,7 +260,6 @@ class CallMeMaybe(Small_LLM_Model):
             prompt_ids = self.encode(prompt_str)[0].tolist()
             input_ids = tools_ids + prompt_ids
             raw = self.generate(input_ids, prompt_text)
-            print(raw)
             try:
                 results.append(json.loads(raw))
                 print(f"Generated JSON: {raw}\n")

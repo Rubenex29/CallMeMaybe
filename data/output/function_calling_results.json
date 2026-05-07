@@ -54,15 +54,15 @@
         "prompt": "Calculate the square root of 144",
         "name": "fn_get_square_root",
         "parameters": {
-            "a": 14
+            "a": 144
         }
     },
     {
         "prompt": "Replace all numbers in \"Hello 34 I'm 233 years old\" with NUMBERS",
         "name": "fn_substitute_string_with_regex",
         "parameters": {
-            "source_string": "Hello 34 I'm 23",
-            "regex": "34|23",
+            "source_string": "Hello 34 I'm 233 years old",
+            "regex": "\\\\d",
             "replacement": "NUMBERS"
         }
     },
@@ -82,6 +82,13 @@
             "source_string": "The cat sat on the mat with another cat",
             "regex": "cat",
             "replacement": "dog"
+        }
+    },
+    {
+        "prompt": "Can you help me bake a cake?",
+        "name": "fn_greet",
+        "parameters": {
+            "name": "user"
         }
     }
 ]
