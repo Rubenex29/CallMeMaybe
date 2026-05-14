@@ -51,19 +51,19 @@ class CustomTokenizer:
                     if len(parts) == 2:
                         merges.append((parts[0], parts[1]))
         return merges
-    
+
     def encode_custom(self, text: str) -> torch.Tensor:
         """
         Encode text to token IDs.
-        
+
         TODO: Implementar encoding com BPE
         - Converter texto em bytes/caracteres iniciais
         - Aplicar merges sucessivos até convergência
         - Retornar tensor com shape [1, num_tokens]
-        
+
         Args:
             text: String to encode
-            
+
         Returns:
             torch.Tensor: Shape [1, num_tokens] com token IDs
         """
@@ -71,19 +71,19 @@ class CustomTokenizer:
         ids = []
         # TODO: Implementar aqui
         return torch.tensor([ids], dtype=torch.long)
-    
+
     def decode_custom(self, ids: torch.Tensor | List[int]) -> str:
         """
         Decode token IDs to text.
-        
+
         TODO: Implementar decoding
         - Converter cada ID para string usando reverse_vocab
         - Concatenar as strings
         - Lidar com special tokens se necessário
-        
+
         Args:
             ids: Token IDs (Tensor or list)
-            
+
         Returns:
             str: Decoded text
         """
@@ -93,13 +93,13 @@ class CustomTokenizer:
             # Se é 2D, pegar primeiro elemento
             if isinstance(ids[0], list):
                 ids = ids[0]
-        
+
         # TODO: Implementar aqui
         tokens = []
 
         for id in ids:
             token = self.reverse_vocab.get(id, "")
-            
+
             if token.startswith("Ġ"):
                 token = " " + token[1:]
 

@@ -1,2 +1,7 @@
-__pycache__
-venv
+__pycache__/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/

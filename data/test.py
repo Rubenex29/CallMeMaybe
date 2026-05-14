@@ -4,14 +4,16 @@ import time
 
 # IMPORTANT: Adjust the import according to your main file name.
 # If your code is in a file named call_me_maybe.py, use:
-from call_me_maybe import CallMeMaybe, TOOLS_DESCRIPTION
+from call_me_maybe import CallMeMaybe
 
 
 class TestSuite:
     def __init__(self):
         print("Loading model for tests...")
         self.model = CallMeMaybe()
-        self.tools_ids = self.model.encode(TOOLS_DESCRIPTION)[0].tolist()
+        self.tools_ids = (
+            self.model.encode(self.model.tools_description)[0].tolist()
+        )
         self.passed = 0
         self.failed = 0
 
