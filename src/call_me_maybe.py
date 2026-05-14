@@ -31,6 +31,7 @@ You are a tool-calling assistant.
 If the user request can be solved with a tool,
 respond ONLY with valid JSON.
 
+
 The JSON should have the following format:
 Example:
 Every detail:
@@ -212,44 +213,48 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
                     logits = self.get_logits_from_input_ids(input_ids)
                     next_token_id = int(np.argmax(logits))
                     token_str = self.decode([next_token_id])
-                    
-                    # For strings, look for unescaped closing quote as the only stop marker
-                    # This allows commas, braces, and other chars inside string values
-                    print(token_str)
-                    if '"' in token_str:
 
-                        # Check if quote is escaped by counting preceding backslashes
+                    # For strings, look for unescaped closing
+                    # quote as the only stop marker
+                    # This allows commas, braces, and
+                    # otherchars inside string values
+                    if '"' in token_str:
+                        # Check if quote is escaped by
+                        # counting preceding backslashes
                         idx = token_str.find('"')
                         num_backslashes = 0
                         j = idx - 1
                         while j >= 0 and token_str[j] == '\\':
                             num_backslashes += 1
                             j -= 1
-                        # If even number of backslashes (including 0), quote is NOT escaped
+                        # If even number of backslashes (including 0),
+                        # quote is NOT escaped
                         if num_backslashes % 2 == 0:
                             # Found closing quote - split at it
                             token_str = token_str[:idx]
                             if token_str:
-                                safe_token_str = escape_json_string_fragment(token_str)
-                                encoded_token = self.encode(safe_token_str)[0].tolist()
-                                r += safe_token_str
+                                encoded_token = (
+                                    self.encode(token_str)[0].tolist()
+                                )
+                                r += token_str
                                 input_ids.extend(encoded_token)
                             # Add closing quote
                             input_ids.extend(self.encode('"')[0].tolist())
                             break
 
-                    # No closing quote found, add entire token as part of string content
+                    # No closing quote found,
+                    # add entire token as part of string content
                     if iteration_count == 1 and token_str.startswith(" "):
                         token_str = token_str.lstrip()
 
                     if token_str:
-                        safe_token_str = escape_json_string_fragment(token_str)
-                        encoded_token = self.encode(safe_token_str)[0].tolist()
-                        r += safe_token_str
+                        encoded_token = self.encode(token_str)[0].tolist()
+                        r += token_str
                         input_ids.extend(encoded_token)
 
                 if t["type"] == "boolean":
-                    # For booleans, we expect the model to generate 'true' or 'false'
+                    # For booleans, we expect the model to
+                    # generate 'true' or 'false'
                     logits = self.get_logits_from_input_ids(input_ids)
                     next_token_id = int(np.argmax(logits))
                     token_str = self.decode([next_token_id])
@@ -352,7 +357,7 @@ if __name__ == "__main__":
 Commands from CallMeMaybe/moulinette:
 
 teste1-public-generate:
-uv run --active python ../data/call_me_maybe.py \
+uv run --active python ../src/call_me_maybe.py \
     --definitions-path ../data/input/public_functions_definition.json \
     --tests-path ../data/input/public_function_calling_tests.json \
     --output-path ../data/output/function_calling_results_public.json
@@ -362,7 +367,7 @@ uv run --active python -m moulinette grade_student_answers \
     ../data/output/function_calling_results_public.json --set public
 
 teste2-private-generate:
-uv run --active python ../data/call_me_maybe.py \
+uv run --active python ../src/call_me_maybe.py \
     --definitions-path ../data/input/private_functions_definition.json \
     --tests-path ../data/input/private_function_calling_tests.json \
     --output-path ../data/output/function_calling_results_private.json
