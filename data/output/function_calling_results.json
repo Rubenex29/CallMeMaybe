@@ -1,9 +1,0 @@
-[
-    {
-        "prompt": "Is 7 an even number?",
-        "name": "fn_is_even",
-        "parameters": {
-            "n": 7.0
-        }
-    }
-]

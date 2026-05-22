@@ -3,13 +3,12 @@ import json
 import time
 from pathlib import Path
 from typing import Any
-
 import numpy as np
 from llm_sdk import Small_LLM_Model as Small_LLM_ModelBase
 
-DEFAULT_FUNCTIONS_DEFS_PATH = Path("input/functions_definition.json")
-DEFAULT_TESTS_PATH = Path("input/function_calling_tests.json")
-DEFAULT_OUTPUT_PATH = Path("output/function_calling_results.json")
+DEFAULT_FUNCTIONS_DEFS_PATH = Path("../data/input/functions_definition.json")
+DEFAULT_TESTS_PATH = Path("../data/input/function_calling_tests.json")
+DEFAULT_OUTPUT_PATH = Path("../data/output/function_calling_results.json")
 
 
 def load_json_file(file_path: Path) -> Any:
@@ -36,6 +35,7 @@ The JSON should have the following format:
 Example:
 Every detail:
 {tools_info}
+Don't escape the JSON
 Vowels:[aeiouAEIOU]
 Do not add text before or after the JSON.
 It must end with the closing curly brace of the JSON.
@@ -82,10 +82,8 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
         name = self.name_token
         param = self.params_open_token
 
-        # --- CONSTRAINED DECODING ---
-        # Force the first generated token to be the opening brace '{'
+        # append the opening curly brace for the JSON object
         input_ids.extend([self.id_json_open])
-        # ------------------------------------------------------
 
         # Append the encoded prompt request
         input_ids.extend(request)
@@ -94,8 +92,8 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
 
         # Loop until the generated text matches one of the available
         # function names
-        # r: string to decode the recent tokens and check what has
-        # been generated
+        # r: string that we build iteratively from the generated tokens to
+        # check against function names
         r = ""
         token_index = 0
         funcs = self.get_func_definitions()
@@ -161,10 +159,10 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
             # Keep generated string content JSON-safe while building output
             return (
                 fragment
-                .replace('\\', '\\')
-                .replace('\n', '\n')
-                .replace('\r', '\r')
-                .replace('\t', '\t')
+                .replace('\\', '\\\\')
+                .replace('\n', '\\n')
+                .replace('\r', '\\r')
+                .replace('\t', '\\t')
             )
 
         # Iteratively process each parameter
@@ -238,8 +236,6 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
                                 )
                                 r += token_str
                                 input_ids.extend(encoded_token)
-                            # Add closing quote
-                            input_ids.extend(self.encode('"')[0].tolist())
                             break
 
                     # No closing quote found,
@@ -270,6 +266,10 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
                             # Fallback to 'false' if no valid boolean found
                             fallback = self.encode('false')[0].tolist()
                             input_ids.extend(fallback)
+            if t["type"] == "string":
+                # Close the string value with a quote
+                a = self.encode('"')[0].tolist()
+                input_ids.extend(a)
             if p != list(params.keys())[-1]:
                 # If it is not the last parameter, add a comma separator
                 a = self.encode(', ')[0].tolist()
@@ -318,7 +318,7 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
             return
 
         elapsed = time.perf_counter() - start
-        print(f"Tempo de execução: {elapsed:.4f}s")
+        print(f"Execution time: {elapsed:.4f}s")
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
