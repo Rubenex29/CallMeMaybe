@@ -2,8 +2,9 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 import numpy as np
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from llm_sdk import Small_LLM_Model as Small_LLM_ModelBase
 
 DEFAULT_FUNCTIONS_DEFS_PATH = Path("../data/input/functions_definition.json")
@@ -11,17 +12,52 @@ DEFAULT_TESTS_PATH = Path("../data/input/function_calling_tests.json")
 DEFAULT_OUTPUT_PATH = Path("../data/output/function_calling_results.json")
 
 
+class ParameterDefinition(BaseModel):
+    type: Literal["string", "number", "integer", "boolean"]
+
+
+class FunctionDefinition(BaseModel):
+    name: str
+    description: str
+    parameters: dict[str, ParameterDefinition]
+    returns: ParameterDefinition
+
+
+class PromptTest(BaseModel):
+    prompt: str
+
+
+FUNCTION_DEFINITIONS_ADAPTER = TypeAdapter(list[FunctionDefinition])
+TESTS_ADAPTER = TypeAdapter(list[PromptTest])
+
+
 def load_json_file(file_path: Path) -> Any:
     with open(file_path, "r", encoding="utf-8") as file_handle:
         return json.load(file_handle)
 
 
-def build_tools_description(functions_list: list[dict[Any, Any]]) -> str:
+def load_validated_json(file_path: Path, adapter: Any) -> Any:
+    raw_data = load_json_file(file_path)
+    try:
+        return adapter.validate_python(raw_data)
+    except ValidationError as exc:
+        raise ValueError(
+            f"Invalid JSON structure in {file_path}: {exc}"
+        ) from exc
+
+
+def build_tools_description(functions_list: list[FunctionDefinition]) -> str:
     tools_info = ""
     for fn in functions_list:
-        tools_info += f"Tool Name: {fn['name']}\n"
-        tools_info += f"Description: {fn['description']}\n"
-        tools_info += f"Parameters: {fn['parameters']}\n"
+        tools_info += f"Tool Name: {fn.name}\n"
+        tools_info += f"Description: {fn.description}\n"
+        parameters_json = json.dumps(
+            {k: v.model_dump() for k, v in fn.parameters.items()},
+            ensure_ascii=False,
+        )
+        tools_info += (
+            f"Parameters: {parameters_json}\n"
+        )
         tools_info += "\n"
 
     return f"""
@@ -54,7 +90,10 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
         self.tests_path = Path(tests_path)
         self.output_path = Path(output_path)
 
-        self.functions = load_json_file(self.definitions_path)
+        self.functions = load_validated_json(
+            self.definitions_path,
+            FUNCTION_DEFINITIONS_ADAPTER,
+        )
         self.tools_description = build_tools_description(self.functions)
 
         self.id_json_open = self.encode("{")[0].tolist()[0]
@@ -67,7 +106,7 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
         self.name_token = self.encode(' "name": "')[0].tolist()
         self.params_open_token = self.encode(', "parameters": {')[0].tolist()
 
-    def get_func_definitions(self) -> Any:
+    def get_func_definitions(self) -> list[FunctionDefinition]:
         # Return the cached functions loaded during __init__
         return self.functions
 
@@ -99,7 +138,7 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
         funcs = self.get_func_definitions()
         func_name = {}
         for f in funcs:
-            func_name[f["name"]] = f["description"], f["parameters"]
+            func_name[f.name] = f.description, f.parameters
         # Handle the case where the model needs to pick an exact function name
         # default is 50 tokens
         # but we can break early if we match a function name
@@ -148,22 +187,12 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
 
         def get_function(
             name: str,
-            functions: list[Any]
-        ) -> dict[Any, Any] | None:
-            return next((fn for fn in functions if fn["name"] == name), None)
+            functions: list[FunctionDefinition]
+        ) -> FunctionDefinition | None:
+            return next((fn for fn in functions if fn.name == name), None)
 
         fn = get_function(r, self.functions)
-        params = fn["parameters"] if fn else {}
-
-        def escape_json_string_fragment(fragment: str) -> str:
-            # Keep generated string content JSON-safe while building output
-            return (
-                fragment
-                .replace('\\', '\\\\')
-                .replace('\n', '\\n')
-                .replace('\r', '\\r')
-                .replace('\t', '\\t')
-            )
+        params = fn.parameters if fn else {}
 
         # Iteratively process each parameter
         for p, t in params.items():
@@ -173,7 +202,7 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
             # Iteratively generate the parameter value, checking against
             # expected type
             r = ""  # clear tracked generation output
-            if t["type"] == "string":
+            if t.type == "string":
                 # For strings, prepend the opening quote
                 a = self.encode('"')[0].tolist()
                 input_ids.extend(a)
@@ -184,7 +213,7 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
             ids = input_ids.copy()
             while iteration_count < max_iterations:
                 iteration_count += 1
-                if t["type"] == "number" or t["type"] == "integer":
+                if t.type == "number" or t.type == "integer":
                     logits = self.get_logits_from_input_ids(ids)
                     next_token_id = int(np.argmax(logits))
                     token_str = self.decode([next_token_id])
@@ -200,14 +229,14 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
                         r += clean_str
                     else:
                         # if parameter type if float, convert to float
-                        if t["type"] != "integer":
+                        if t.type != "integer":
                             new_n = float(r) if r else 0.0
                         else:
                             new_n = int(r)
                         next_token_id = self.encode(str(new_n))[0].tolist()
                         input_ids.extend(next_token_id)
                         break
-                if t["type"] == "string":
+                if t.type == "string":
                     logits = self.get_logits_from_input_ids(input_ids)
                     next_token_id = int(np.argmax(logits))
                     token_str = self.decode([next_token_id])
@@ -248,7 +277,7 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
                         r += token_str
                         input_ids.extend(encoded_token)
 
-                if t["type"] == "boolean":
+                if t.type == "boolean":
                     # For booleans, we expect the model to
                     # generate 'true' or 'false'
                     logits = self.get_logits_from_input_ids(input_ids)
@@ -266,7 +295,7 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
                             # Fallback to 'false' if no valid boolean found
                             fallback = self.encode('false')[0].tolist()
                             input_ids.extend(fallback)
-            if t["type"] == "string":
+            if t.type == "string":
                 # Close the string value with a quote
                 a = self.encode('"')[0].tolist()
                 input_ids.extend(a)
@@ -287,13 +316,16 @@ class CallMeMaybe(Small_LLM_ModelBase):  # type: ignore[misc]
         start = time.perf_counter()
         results = []
         try:
-            tests = load_json_file(self.tests_path)
+            tests = load_validated_json(self.tests_path, TESTS_ADAPTER)
         except FileNotFoundError:
             print(f"File not found: {self.tests_path}")
             return
+        except ValueError as exc:
+            print(exc)
+            return
         tools_ids = self.encode(self.tools_description)[0].tolist()
         for call in tests:
-            prompt_text = call["prompt"]
+            prompt_text = call.prompt
             print(f"User request: {prompt_text}")
             prompt_str = "\n\nUser request: " + prompt_text
             prompt_ids = self.encode(prompt_str)[0].tolist()
